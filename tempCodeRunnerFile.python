@@ -1,0 +1,15 @@
+inp= input()
+
+c_star= 0
+c_hash= 0
+for i in inp:
+    if i == '*':
+        c_star += 1
+    elif i == '#':
+        c_hash += 1
+
+if c_star > c_hash:
+    print(c_star - c_hash)
+elif c_hash > c_star:
+    print(c_hash - c_star)  
+else:    print(0)

@@ -1,0 +1,15 @@
+# LLM Providers
+OPENAI_API_KEY=sk-your-openai-key-here
+
+# Qdrant Vector Database
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+
+# Embedding Model
+EMBEDDING_MODEL=all-MiniLM-L6-v2
+
+# Cache Settings
+CACHE_SIMILARITY_THRESHOLD=0.95
+
+# Rate Limiting
+RATE_LIMIT_RPM=60
