@@ -4,7 +4,6 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 # Resolve the development .env relative to the source tree, not the working directory.
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
@@ -41,6 +40,17 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     rate_limit_rpm: int = 60
+
+    # Circuit Breaker
+    circuit_failure_threshold: int = 5
+    circuit_recovery_timeout: float = 30.0
+    circuit_half_open_max_calls: int = 3
+
+    # Provider Retry
+    retry_max_attempts: int = 3
+    retry_base_delay: float = 1.0
+    retry_max_delay: float = 8.0
+    retry_jitter: float = 0.25
 
 
 # Singleton instance — import this everywhere
