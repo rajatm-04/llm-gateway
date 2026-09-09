@@ -1,25 +1,36 @@
-from fastapi import FastAPI
+"""FastAPI application entry point."""
+
 from contextlib import asynccontextmanager
+from fastapi import FastAPI
 from gateway.cache.semantic_cache import SemanticCache
 
 
-# Create a shared cache instance
 cache = SemanticCache()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown logic."""
+    """Initialize and clean up application resources."""
+    app.state.cache = cache
+
     await cache.initialize()
+
     yield
-    # Cleanup on shutdown (if needed) goes here
 
-app = FastAPI(title="LLM Gateway",
-               description="High-Performance LLM Gateway with Semantic Caching & Routing",
-                 version="1.0.0")
+    await cache.close()
 
-# Import and include the chat router
+
+app = FastAPI(
+    title="LLM Gateway",
+    description="High-Performance LLM Gateway with Semantic Caching & Routing",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
 from gateway.api.v1.chat import router as chat_router
-@app.include_router(chat_router)
+
+app.include_router(chat_router)
+
 
 @app.get("/")
 async def root():
@@ -30,6 +41,8 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "ok",
-            "version": app.version}
+    return {
+        "status": "ok",
+        "version": app.version,
+    }
 

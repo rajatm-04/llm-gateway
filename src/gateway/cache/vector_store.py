@@ -1,48 +1,83 @@
+"""Qdrant vector-store abstraction."""
+
+from typing import Any
+from uuid import uuid4
+
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import VectorParams, Distance, PointStruct
+from qdrant_client.models import (
+    Distance,
+    PointStruct,
+    VectorParams,
+)
+
 from gateway.config import settings
-import uuid
+
 
 class VectorStore:
-    def __init__(self):
-        self.client = AsyncQdrantClient(host=settings.qdrant_host,
-                                        port=settings.qdrant_port)
+    """Stores and searches semantic-cache vectors in Qdrant."""
+
+    def __init__(self) -> None:
+        self.client = AsyncQdrantClient(
+            host=settings.qdrant_host,
+            port=settings.qdrant_port,
+        )
         self.collection_name = "queries"
-        self.vector_size = 384  # Size for all-MiniLM-L6-v2
+        self.vector_size = 384  # all-MiniLM-L6-v2
 
+    async def ensure_collection(self) -> None:
+        """Create the collection if it does not already exist."""
+        collections = await self.client.get_collections()
 
-    async def ensure_collection(self):
-        """Create the collection if it doesn't exist."""
-        collection_exists = await self.client.has_collection(self.collection_name)
-        if not collection_exists:
+        exists = any(
+            collection.name == self.collection_name
+            for collection in collections.collections
+        )
+
+        if not exists:
             await self.client.create_collection(
                 collection_name=self.collection_name,
-                vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE)
+                vectors_config=VectorParams(
+                    size=self.vector_size,
+                    distance=Distance.COSINE,
+                ),
             )
 
-
-    async def search(self, vector: list[float], threshold: float) -> dict | None:
-        """Search for a similar vector. Return its payload if similarity > threshold."""
-        # Use self.client.search
-        results = await self.client.search(
+    async def search(
+        self,
+        vector: list[float],
+        threshold: float,
+    ) -> dict[str, Any] | None:
+        """Return the payload of the closest match above the threshold."""
+        results = await self.client.query_points(
             collection_name=self.collection_name,
-            query_vector=vector,
+            query=vector,
             limit=1,
-            score_threshold=threshold
+            score_threshold=threshold,
+            with_payload=True,
         )
-        # Return the payload (the cached response) if a match is found, else None
-        if results:
-            return results[0].payload
-        return None
-    
-        async def upsert(self, vector: list[float], payload: dict):
-            """Save a new vector and its payload."""
-            id = str(uuid.uuid4())  # Generate a unique ID (e.g., str(uuid.uuid4()))
-            point = PointStruct(id=id, vector=vector, payload=payload)     # Create a PointStruct(id=..., vector=..., payload=...)
 
-            # Use self.client.upsert
-            await self.client.upsert(
-                collection_name=self.collection_name,
-                points=[point]
-            )   
-            pass
+        if not results.points:
+            return None
+
+        return results.points[0].payload
+
+    async def upsert(
+        self,
+        vector: list[float],
+        payload: dict[str, Any],
+    ) -> None:
+        """Insert a vector and its payload into Qdrant."""
+        point = PointStruct(
+            id=str(uuid4()),
+            vector=vector,
+            payload=payload,
+        )
+
+        await self.client.upsert(
+            collection_name=self.collection_name,
+            points=[point],
+        )
+
+    async def close(self) -> None:
+        """Close the Qdrant client."""
+        await self.client.close()
