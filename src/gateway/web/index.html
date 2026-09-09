@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>LLM Gateway — Playground</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/assets/playground.css">
+  <script src="/assets/playground.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to request</a>
+  <div class="shell">
+    <header class="masthead">
+      <a class="wordmark" href="/">LLM Gateway</a>
+      <nav aria-label="Resources"><a href="/docs">API reference</a></nav>
+    </header>
+    <main id="main">
+      <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">Local development · Playground</p>
+        <h1 id="page-title">One request. See every step.</h1>
+        <p class="lede">Send a prompt, inspect the route, and see when a saved answer is reused.</p>
+        <p id="connection" class="small" role="status">Loading gateway settings…</p>
+      </section>
+
+      <noscript><p class="notice">JavaScript is required to send requests from this playground. You can also use the API reference.</p></noscript>
+      <form id="request-form">
+        <fieldset id="request-controls" disabled>
+          <legend class="section-title">01 / Request</legend>
+          <div class="field">
+            <label for="prompt">Prompt</label>
+            <p id="prompt-help" class="hint">Each send is a single user message. Previous answers are not included.</p>
+            <textarea id="prompt" name="prompt" rows="6" required aria-describedby="prompt-help"></textarea>
+          </div>
+          <div class="examples" aria-label="Fill a sample prompt">
+            <span class="small">Try a prompt</span>
+            <button type="button" class="text-button" data-example="rewrite">Rewrite</button>
+            <button type="button" class="text-button" data-example="summary">Summary</button>
+            <button type="button" class="text-button" data-example="extraction">Extraction</button>
+            <button type="button" class="text-button" data-example="question">General question</button>
+          </div>
+          <p class="hint">Examples only fill the textbox; they never send a request.</p>
+
+          <div class="control-grid">
+            <div class="field">
+              <label for="tier">Routing</label>
+              <select id="tier" name="tier" aria-describedby="tier-help">
+                <option value="local" selected>Local</option>
+                <option value="auto">Auto</option>
+                <option value="premium">Premium</option>
+              </select>
+              <p id="tier-help" class="hint">Local is selected to avoid accidental paid calls.</p>
+            </div>
+            <div class="field">
+              <label for="max-tokens">Max output tokens</label>
+              <input id="max-tokens" name="max-tokens" type="number" min="1" step="1" value="128" required aria-describedby="tokens-help">
+              <p id="tokens-help" class="hint">An output ceiling, not a spending cap.</p>
+            </div>
+          </div>
+          <label class="check" for="stream">
+            <input id="stream" type="checkbox" checked>
+            <span>Stream the answer as it arrives</span>
+          </label>
+
+          <details class="advanced">
+            <summary>Advanced settings</summary>
+            <div class="control-grid">
+              <div class="field">
+                <label for="model">Explicit model</label>
+                <select id="model" aria-describedby="model-help"><option value="">Unspecified</option></select>
+                <p id="model-help" class="hint">An explicit model takes priority over Auto. A conflicting tier returns HTTP 422.</p>
+              </div>
+              <div class="field">
+                <label for="temperature">Temperature</label>
+                <input id="temperature" type="number" min="0" max="2" step="0.1" value="0" required aria-describedby="temperature-help">
+                <p id="temperature-help" class="hint">Lower values request less-random output.</p>
+              </div>
+            </div>
+            <p id="limits" class="hint"></p>
+          </details>
+
+          <div id="paid-notice" class="notice" hidden>
+            <p><strong>This request could use premium.</strong> Auto may choose a paid provider. Every cache miss can incur charges, including repeated requests if caching fails.</p>
+            <label class="check" for="paid-consent">
+              <input id="paid-consent" type="checkbox">
+              <span>I understand this send may incur a charge.</span>
+            </label>
+          </div>
+        </fieldset>
+        <div class="actions">
+          <button id="send" class="primary" type="submit" disabled>Send request</button>
+          <button id="stop" type="button" hidden>Stop waiting</button>
+          <span class="hint">No automatic retries.</span>
+        </div>
+        <p class="hint">Prompts and completed answers may be stored in Qdrant. Use non-sensitive text. Stopping does not guarantee cancellation of provider work or billing.</p>
+      </form>
+
+      <section class="response-section" aria-labelledby="answer-title">
+        <div class="section-heading">
+          <h2 id="answer-title" class="section-title">02 / Answer</h2>
+          <span id="request-status" class="small" role="status" aria-live="polite">Ready when you are</span>
+        </div>
+        <p id="error" class="notice" role="alert" hidden></p>
+        <p id="answer-empty" class="hint">Your answer will appear here after you send a request.</p>
+        <div id="answer" class="answer" role="region" aria-label="Model answer" tabindex="0" hidden></div>
+        <p id="answer-note" class="hint" hidden></p>
+      </section>
+
+      <section class="inspection" aria-labelledby="details-title">
+        <h2 id="details-title" class="section-title">03 / Request details</h2>
+        <p id="details-empty" class="hint">Real response metadata, not a prediction of the route.</p>
+        <div id="request-details" hidden>
+          <p id="request-summary" class="hint"></p>
+          <dl class="metrics">
+            <div><dt>Selected tier</dt><dd id="result-tier">Not reported</dd></div>
+            <div><dt>Cache</dt><dd id="result-cache">Not reported</dd></div>
+            <div><dt>HTTP status</dt><dd id="result-http">Not reported</dd></div>
+            <div><dt>Elapsed in browser</dt><dd id="result-elapsed">Waiting</dd></div>
+          </dl>
+          <p id="cache-explanation" class="hint"></p>
+          <dl class="detail-list">
+            <div><dt>Model</dt><dd id="result-model">Not reported</dd></div>
+            <div><dt>Model metadata</dt><dd id="result-source">Not reported</dd></div>
+            <div><dt>Routing reason</dt><dd id="result-reason">Not reported</dd></div>
+            <div><dt>Cache lookup</dt><dd id="result-cache-time">Not reported</dd></div>
+            <div><dt>Finish reason</dt><dd id="result-finish">Not reported</dd></div>
+            <div><dt>Token usage</dt><dd id="result-usage">Not reported</dd></div>
+            <div><dt>Profile status</dt><dd id="result-profile">Not reported</dd></div>
+            <div><dt>Policy version</dt><dd id="result-policy">Not reported</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <aside class="guide" aria-labelledby="guide-title">
+        <h2 id="guide-title" class="section-title">Read the result</h2>
+        <p><strong>MISS</strong> means no eligible saved answer was found. Send the same prompt with the same settings again to check for a <strong>HIT</strong>. Changing the tier must not reuse an answer from the other tier.</p>
+        <p>Auto recognizes narrow rewrite, summary, and extraction patterns. Other requests go premium—even simple questions. A successful request is not a guarantee of a correct answer.</p>
+      </aside>
+    </main>
+    <footer><span>Development only. No authentication or tenant isolation.</span><span>Routing remains experimental unless explicitly validated.</span></footer>
+  </div>
+</body>
+</html>

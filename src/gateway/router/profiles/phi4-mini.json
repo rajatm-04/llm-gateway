@@ -1,0 +1,11 @@
+{
+  "model": "phi4-mini",
+  "version": "phi4-mini-experimental-v1",
+  "validated": false,
+  "notes": "Illustrative operating ranges, NOT measured quality or native context limits. Evaluate before approval. Applies only to the exact configured model name; record quantization/deployment details in evaluation notes.",
+  "tasks": {
+    "rewrite": {"enabled": true, "max_input_words": 300},
+    "summary": {"enabled": true, "max_input_words": 500},
+    "extraction": {"enabled": true, "max_input_words": 250}
+  }
+}

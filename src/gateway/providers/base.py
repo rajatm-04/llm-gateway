@@ -23,6 +23,14 @@ class LLMResponse:
         return self.prompt_tokens + self.completion_tokens
 
 
+@dataclass(slots=True)
+class StreamChunk:
+    """Text delta or terminal event; terminal metadata enables safe stream caching."""
+    content: str = ""
+    finish_reason: str | None = None
+    model: str | None = None
+
+
 class Provider(Protocol):
     """Interface every LLM provider must implement."""
 
@@ -37,13 +45,13 @@ class Provider(Protocol):
         """Generate a complete response."""
         ...
 
-    async def generate_stream(
+    def generate_stream(
         self,
         messages: Sequence[ChatMessage],
         *,
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamChunk]:
         """Yield generated response chunks."""
         ...

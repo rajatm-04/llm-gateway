@@ -1,70 +1,50 @@
-"""Semantic cache orchestration."""
+"""Scoped semantic cache orchestration; embedding work stays off the event loop."""
 
+import asyncio
 from typing import Any
 
 from gateway.cache.embedder import Embedder
+from gateway.cache.scope import CacheKey
 from gateway.cache.vector_store import VectorStore
-from gateway.config import settings
+from gateway.config import Settings, settings
 
 
 class SemanticCache:
-    """Coordinates embedding, lookup, and storage of cached responses."""
-
-    def __init__(
-        self,
-        embedder: Embedder | None = None,
-        vector_store: VectorStore | None = None,
-    ) -> None:
-        self.embedder = embedder or Embedder()
-        self.vector_store = vector_store or VectorStore()
+    def __init__(self, embedder: Embedder | None = None, vector_store: VectorStore | None = None,
+                 config: Settings | None = None):
+        self.config = config if config is not None else settings
+        self.embedder = embedder if embedder is not None else Embedder(self.config.embedding_model)
+        self.vector_store = vector_store if vector_store is not None else VectorStore(self.config)
+        self._embedding_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
-        """Ensure the Qdrant collection exists."""
         await self.vector_store.ensure_collection()
 
-    async def lookup(self, query: str) -> dict[str, Any] | None:
-        """
-        Find a semantically similar cached query.
+    async def _embed(self, text: str) -> list[float]:
+        # Serialize model use/lazy loading within this cache instance.
+        async with self._embedding_lock:
+            return await asyncio.to_thread(self.embedder.embed, text)
 
-        Returns the cached payload on a hit, otherwise None.
-        """
-        query = query.strip()
-
-        if not query:
-            return None
-
-        vector = self.embedder.embed(query)
-
+    async def lookup(self, key: CacheKey) -> dict[str, Any] | None:
+        if key.exact:
+            return await self.vector_store.find_exact(key.filters)
+        vector = await self._embed(key.query)
         return await self.vector_store.search(
             vector=vector,
-            threshold=settings.cache_similarity_threshold,
+            threshold=self.config.cache_similarity_threshold,
+            filters=key.filters,
         )
 
-    async def store(
-        self,
-        query: str,
-        response: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        """Embed and store a response in Qdrant."""
-        query = query.strip()
-
-        if not query:
-            raise ValueError("Query cannot be empty")
-
-        vector = self.embedder.embed(query)
-
-        payload: dict[str, Any] = {
-            "query": query,
-            "response": response,
+    async def store(self, key: CacheKey, response: str, metadata: dict[str, Any] | None = None) -> None:
+        # Exact entries don't need embeddings, but the collection requires a vector.
+        vector = ([0.0] * self.vector_store.vector_size if key.exact else await self._embed(key.query))
+        payload = {
             **(metadata or {}),
+            "query": key.query,
+            "response": response,
+            **key.fields,  # Caller metadata must never override cache boundaries.
         }
-
-        await self.vector_store.upsert(
-            vector=vector,
-            payload=payload,
-        )
+        await self.vector_store.upsert(vector=vector, payload=payload)
 
     async def close(self) -> None:
-        """Close the vector-store connection."""
         await self.vector_store.close()
