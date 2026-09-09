@@ -62,6 +62,23 @@ Repeat for a cache hit. Add `-H 'X-Model-Tier: premium'` to force premium proven
 it must not reuse the local entry. Add `"stream":true` to request SSE.
 Premium misses require your configured API key and can cost money.
 
+The gateway accepts an optional `X-Request-ID` header and generates one when it is
+omitted. The ID is returned in the `X-Request-ID` response header and can be used
+to correlate a client request with its server log entry:
+
+```bash
+curl -i http://localhost:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-Request-ID: client-trace-123' \
+  -d '{"messages":[{"role":"user","content":"Summarize this sentence: Caching avoids repeated provider work."}]}'
+```
+
+Each completed request emits one structured JSON log record with safe operational
+metadata such as the request ID, route, status, duration, cache status, routing
+decision, model, fallback, streaming, provider outcome, and error category.
+Prompts, message contents, authorization headers, API keys, and raw provider
+errors are not logged. Client disconnects are recorded as cancellation events.
+
 ## Browser playground
 
 The root URL serves a small HTML/CSS/JavaScript interface from FastAPI. No Node.js,
@@ -103,6 +120,8 @@ and the bounded live sequence that completes the remaining Phase 3 checkpoint.
 
 Response headers include `X-Model-Tier`, `X-Model-Used`, `X-Routing-Reason`,
 `X-Routing-Policy`, `X-Routing-Profile`, `X-Cache`, and `X-Cache-Latency-Ms`.
+All responses also include `X-Request-ID`; clients should retain it when reporting
+errors or investigating a request.
 On a new stream, `X-Model-Used` means the selected model and
 `X-Model-Used-Source: selected` makes that explicit. Headers cannot change after
 streaming starts. Cached metadata records the provider-reported model when available.
