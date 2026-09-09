@@ -11,6 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from gateway.api.v1.chat import router as chat_router
 from gateway.config import Settings, settings
 from gateway.providers.registry import ProviderRegistry
+from gateway.request_logging import RequestLoggingMiddleware
 from gateway.resilience.circuit_breaker import CircuitBreaker
 from gateway.resilience.rate_limiter import (
     RateLimiter,
@@ -85,6 +86,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.add_middleware(RateLimitMiddleware, limiter=RateLimiter(config.rate_limit_rpm))
+    app.add_middleware(RequestLoggingMiddleware)
     app.include_router(chat_router)
 
     web_directory = Path(__file__).resolve().parent / "web"

@@ -1,8 +1,6 @@
 """Resolve routing once, enforce cache scope, then generate or stream."""
 
 import asyncio
-import json
-import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import aclosing
@@ -21,6 +19,7 @@ from gateway.models.schemas import (
     UsageInfo,
 )
 from gateway.providers.base import LLMResponse, Provider, StreamChunk
+from gateway.request_logging import add_error_category, set_request_metadata
 from gateway.resilience.circuit_breaker import (
     CircuitBreaker,
     CircuitOpenError,
@@ -30,7 +29,6 @@ from gateway.resilience.retry import RetryConfig, retry_async, retry_stream
 from gateway.router.model_router import RoutingDecision, RoutingError
 from gateway.streaming.sse_handler import format_done, format_error, format_sse
 
-logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1", tags=["chat"])
 
 def fallback_allowed(request: Request) -> bool:
@@ -99,11 +97,18 @@ def cache_metadata(decision: RoutingDecision, model: str, **extra) -> dict:
     }
 
 
-async def safe_store(cache, key: CacheKey, content: str, metadata: dict) -> None:
+async def safe_store(
+    cache,
+    key: CacheKey,
+    content: str,
+    metadata: dict,
+    http_request: Request | None = None,
+) -> None:
     try:
         await cache.store(key=key, response=content, metadata=metadata)
     except Exception:  # noqa: BLE001 -- cache failures must not discard an answer.
-        logger.warning("cache_store_failed")
+        if http_request is not None:
+            add_error_category(http_request, "cache_store_failure")
 
 
 async def stream_cached(payload: dict) -> AsyncIterator[str]:
@@ -127,6 +132,7 @@ async def stream_and_cache(
     retry: RetryConfig | None = None,
     model: str | None = None,
     cache_response: bool = True,
+    http_request: Request | None = None,
 ) -> AsyncIterator[str]:
     """Stream chunks with resilience and cache only complete, terminal streams."""
     chunks: list[str] = []
@@ -158,10 +164,14 @@ async def stream_and_cache(
             if terminal is None:
                 raise RuntimeError("Missing terminal stream event")
     except asyncio.CancelledError:
-        logger.info("provider_stream_cancelled")
+        if http_request is not None:
+            set_request_metadata(http_request, provider_outcome="cancelled")
+            add_error_category(http_request, "client_cancelled")
         raise
     except Exception:  # noqa: BLE001 -- sanitize failures after SSE headers are sent.
-        logger.warning("provider_stream_failed")
+        if http_request is not None:
+            set_request_metadata(http_request, provider_outcome="error")
+            add_error_category(http_request, "provider_stream_error")
         yield format_error()
         yield format_done()
         return
@@ -182,6 +192,13 @@ async def stream_and_cache(
                 usage_known=False,
                 finish_reason=finish_reason,
             ),
+            http_request,
+        )
+    if http_request is not None:
+        set_request_metadata(
+            http_request,
+            provider_outcome="success",
+            used_model=terminal.model or dispatch_model,
         )
     yield format_sse(finish_reason=finish_reason)
     yield format_done()
@@ -218,10 +235,17 @@ async def chat_completions(
 ):
     state = http_request.app.state
     config = state.config
+    set_request_metadata(http_request, stream=request.stream)
     try:
         decision = state.model_router.select(request, x_model_tier)
     except RoutingError as exc:
+        add_error_category(http_request, "routing_error")
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    set_request_metadata(
+        http_request,
+        model_tier=decision.tier,
+        selected_model=decision.model,
+    )
 
     if request.max_tokens is None:
         budget = (
@@ -236,7 +260,7 @@ async def chat_completions(
     try:
         payload = await state.cache.lookup(key)
     except Exception:  # noqa: BLE001 -- optional cache failures fall through to generation.
-        logger.warning("cache_lookup_failed")
+        add_error_category(http_request, "cache_lookup_failure")
         payload, cache_failed = None, True
 
     headers = {
@@ -248,20 +272,13 @@ async def chat_completions(
         "X-Routing-Policy": decision.policy_version,
         "X-Routing-Profile": decision.profile_status,
     }
-    logger.info(
-        json.dumps(
-            {
-                "event": "routing_decision",
-                "tier": decision.tier,
-                "selected_model": decision.model,
-                "reason": decision.reason,
-                "policy": decision.policy_version,
-                "profile": decision.profile_status,
-                "cache": headers["X-Cache"],
-            }
-        )
+    set_request_metadata(
+        http_request,
+        cache_status=headers["X-Cache"],
+        used_model=payload["model"] if payload is not None else None,
     )
     if payload is not None:
+        set_request_metadata(http_request, provider_outcome="cache_hit")
         headers["X-Model-Used"] = payload["model"]
         if request.stream:
             return StreamingResponse(stream_cached(payload), media_type="text/event-stream", headers=headers)
@@ -280,23 +297,34 @@ async def chat_completions(
         provider = state.providers.get(decision.tier)
     except RoutingError as exc:
         if decision.tier != "premium":
+            set_request_metadata(http_request, provider_outcome="error")
+            add_error_category(http_request, "provider_unavailable")
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         if not allow_fallback:
+            set_request_metadata(http_request, provider_outcome="unavailable")
+            add_error_category(http_request, "fallback_confirmation_required")
             return fallback_unavailable_response(config)
         provider = state.providers.get("local")
         dispatch_model = config.ollama_model
         fallback = True
+        set_request_metadata(http_request, fallback=True, used_model=dispatch_model)
 
     breaker = _breaker(state, "local" if fallback else decision.tier, config)
     if breaker.state is CircuitState.OPEN:
+        set_request_metadata(http_request, circuit_outcome="open")
         if decision.tier == "premium" and allow_fallback and not fallback:
             provider = state.providers.get("local")
             dispatch_model = config.ollama_model
             breaker = _breaker(state, "local", config)
             fallback = True
+            set_request_metadata(http_request, fallback=True, used_model=dispatch_model)
         elif decision.tier == "premium":
+            set_request_metadata(http_request, provider_outcome="unavailable")
+            add_error_category(http_request, "circuit_open")
             return fallback_unavailable_response(config)
         else:
+            set_request_metadata(http_request, provider_outcome="unavailable")
+            add_error_category(http_request, "circuit_open")
             raise HTTPException(
                 status_code=503,
                 detail="LLM provider circuit is open",
@@ -319,6 +347,7 @@ async def chat_completions(
                 retry=_retry_config(config),
                 model=dispatch_model,
                 cache_response=not fallback,
+                http_request=http_request,
             ),
             media_type="text/event-stream",
             headers=headers,
@@ -337,11 +366,13 @@ async def chat_completions(
             )
         )
     except CircuitOpenError as exc:
+        set_request_metadata(http_request, circuit_outcome="open")
         if decision.tier == "premium" and allow_fallback and not fallback:
             provider = state.providers.get("local")
             breaker = _breaker(state, "local", config)
             dispatch_model = config.ollama_model
             fallback = True
+            set_request_metadata(http_request, fallback=True, used_model=dispatch_model)
             result = await breaker.execute(
                 lambda: retry_async(
                     lambda: provider.generate(
@@ -354,19 +385,33 @@ async def chat_completions(
                 )
             )
         elif decision.tier == "premium":
+            set_request_metadata(http_request, provider_outcome="unavailable")
+            add_error_category(http_request, "circuit_open")
             return fallback_unavailable_response(config)
         else:
+            set_request_metadata(http_request, provider_outcome="unavailable")
+            add_error_category(http_request, "circuit_open")
             raise HTTPException(
                 status_code=503,
                 detail="LLM provider circuit is open",
                 headers={"Retry-After": str(int(config.circuit_recovery_timeout))},
             ) from exc
     except (httpx.TimeoutException, TimeoutError) as exc:
+        set_request_metadata(http_request, provider_outcome="error")
+        add_error_category(http_request, "provider_timeout")
         raise HTTPException(status_code=504, detail="Provider timed out") from exc
     except (httpx.HTTPError, APIError, ValueError, RuntimeError) as exc:
+        set_request_metadata(http_request, provider_outcome="error")
+        add_error_category(http_request, "provider_error")
         raise HTTPException(status_code=502, detail="Provider request failed") from exc
+    except Exception:
+        set_request_metadata(http_request, provider_outcome="error")
+        add_error_category(http_request, "provider_error")
+        raise
 
     if not result.content.strip():
+        set_request_metadata(http_request, provider_outcome="error")
+        add_error_category(http_request, "provider_empty_response")
         raise HTTPException(status_code=502, detail="Provider returned no text response")
     response = create_response(
         content=result.content,
@@ -376,6 +421,12 @@ async def chat_completions(
         finish_reason=result.finish_reason,
     )
     headers["X-Model-Used"] = result.model
+    set_request_metadata(
+        http_request,
+        provider_outcome="success",
+        used_model=result.model,
+        fallback=fallback,
+    )
     if not fallback:
         await safe_store(
             state.cache,
@@ -390,6 +441,7 @@ async def chat_completions(
                 total_tokens=result.total_tokens,
                 finish_reason=response.choices[0].finish_reason,
             ),
+            http_request,
         )
     else:
         headers["X-Fallback"] = "true"
