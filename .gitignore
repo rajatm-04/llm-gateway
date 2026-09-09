@@ -9,3 +9,10 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# Local test/evaluation artifacts (may contain model outputs)
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+evaluation/results/

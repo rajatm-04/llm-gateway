@@ -1,6 +1,11 @@
 """Sentence-transformer embedding wrapper."""
 
-from sentence_transformers import SentenceTransformer
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 from gateway.config import settings
 
@@ -8,14 +13,15 @@ from gateway.config import settings
 class Embedder:
     """Creates vector embeddings for text."""
 
-    def __init__(self) -> None:
-        self.model_name = settings.embedding_model
+    def __init__(self, model_name: str | None = None) -> None:
+        self.model_name = model_name or settings.embedding_model
         self._model: SentenceTransformer | None = None
 
     @property
     def model(self) -> SentenceTransformer:
         """Load the model lazily on first use."""
         if self._model is None:
+            from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer(self.model_name)
 
         return self._model

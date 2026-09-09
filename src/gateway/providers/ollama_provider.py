@@ -8,7 +8,7 @@ import httpx
 
 from gateway.config import settings
 from gateway.models.schemas import ChatMessage
-from gateway.providers.base import LLMResponse
+from gateway.providers.base import LLMResponse, StreamChunk
 
 
 class OllamaProvider:
@@ -77,6 +77,8 @@ class OllamaProvider:
             response.raise_for_status()
 
         data = response.json()
+        if data.get("error"):
+            raise RuntimeError("Ollama reported a generation error")
         return self._to_response(data)
 
     async def generate_stream(
@@ -86,7 +88,7 @@ class OllamaProvider:
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamChunk]:
         """Yield response content chunks from Ollama."""
         payload = self._payload(
             messages,
@@ -96,23 +98,30 @@ class OllamaProvider:
             stream=True,
         )
 
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream(
-                "POST",
-                f"{self.host}/api/chat",
-                json=payload,
-            ) as response:
-                response.raise_for_status()
+        async with (
+            httpx.AsyncClient(timeout=self.timeout) as client,
+            client.stream("POST", f"{self.host}/api/chat", json=payload) as response,
+        ):
+            response.raise_for_status()
 
-                async for line in response.aiter_lines():
-                    if not line:
-                        continue
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
 
-                    data = json.loads(line)
-                    content = data.get("message", {}).get("content")
+                data = json.loads(line)
+                if data.get("error"):
+                    raise RuntimeError("Ollama reported a stream error")
+                content = data.get("message", {}).get("content")
 
-                    if content:
-                        yield content
+                if content:
+                    yield StreamChunk(content=content)
+                if data.get("done"):
+                    yield StreamChunk(
+                        finish_reason=data.get("done_reason") or "stop",
+                        model=data.get("model") or model or self.default_model,
+                    )
+                    return
+            raise RuntimeError("Ollama stream ended before its completion marker")
 
     def _to_response(self, data: dict[str, Any]) -> LLMResponse:
         """Convert an Ollama response to the common provider format."""

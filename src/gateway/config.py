@@ -1,7 +1,9 @@
 """Application configuration loaded from environment variables."""
 
 from pathlib import Path
+from typing import Literal
 
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve the development .env relative to the source tree, not the working directory.
@@ -26,7 +28,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.6-sol"
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "phi4-mini"
-    ollama_timeout: float = 120.0
+    ollama_timeout: float = Field(default=120.0, gt=0)
 
     # Qdrant Vector Database
     qdrant_host: str = "localhost"
@@ -36,9 +38,25 @@ class Settings(BaseSettings):
     embedding_model: str = "all-MiniLM-L6-v2"
 
     # Cache Settings
-    cache_similarity_threshold: float = 0.95
+    cache_similarity_threshold: float = Field(default=0.95, ge=0, le=1)
 
-    # Rate Limiting
+    # Routing: profile ranges are experimental, not measured capability claims.
+    routing_mode: Literal["experimental", "strict"] = "experimental"
+    routing_profile_path: Path = Path(__file__).parent / "router" / "profiles" / "phi4-mini.json"
+    # Conservative deployment admission guards, NOT exact context-token limits.
+    local_max_input_bytes: int = Field(default=12000, gt=0)
+    premium_max_input_bytes: int = Field(default=120000, gt=0)
+    local_max_output_tokens: int = Field(default=2048, gt=0)
+    premium_max_output_tokens: int = Field(default=4096, gt=0)
+    openai_timeout: float = Field(default=120.0, gt=0)
+
+    @field_validator("routing_profile_path")
+    @classmethod
+    def resolve_profile_path(cls, value: Path) -> Path:
+        value = value.expanduser()
+        return value if value.is_absolute() else ENV_FILE.parent / value
+
+    # Rate Limiting (not enforced until the resilience phase)
     rate_limit_rpm: int = 60
 
     # Circuit Breaker
