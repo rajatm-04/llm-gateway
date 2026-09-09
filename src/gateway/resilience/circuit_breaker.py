@@ -3,6 +3,7 @@
 import asyncio
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import aclosing
 from enum import StrEnum
 from typing import TypeVar
 
@@ -85,8 +86,11 @@ class CircuitBreaker:
         is_probe = await self._before_call()
 
         try:
-            async for item in operation():
-                yield item
+            async with aclosing(operation()) as stream:
+                async for item in stream:
+                    yield item
+        except asyncio.CancelledError:
+            raise
         except Exception:
             await self._record_failure()
             raise

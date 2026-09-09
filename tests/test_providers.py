@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -42,6 +43,45 @@ async def test_openai_stream_metadata_empty_choices_and_cleanup():
     assert chunks[-1].finish_reason == "length"
     assert chunks[-1].model == "actual"
     assert create.call_args.kwargs["model"] == "selected"
+    assert stream.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
+async def test_openai_stream_closes_on_failure_or_cancellation(failure):
+    class FailingStream:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+        def __aiter__(self):
+            return self.events()
+
+        async def events(self):
+            yield SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content="partial"),
+                        finish_reason=None,
+                    )
+                ],
+                model="actual",
+            )
+            raise failure("upstream failure")
+
+    stream = FailingStream()
+    create = AsyncMock(return_value=stream)
+    provider = OpenAIProvider.__new__(OpenAIProvider)
+    provider.default_model = "default"
+    provider.client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+
+    with pytest.raises(failure):
+        _ = [chunk async for chunk in provider.generate_stream([], model="selected")]
+
     assert stream.closed
 
 

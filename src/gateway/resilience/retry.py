@@ -3,6 +3,7 @@
 import asyncio
 import random
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import aclosing
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from time import time
@@ -128,9 +129,12 @@ async def retry_stream[T](
     for attempt in range(1, config.max_attempts + 1):
         yielded = False
         try:
-            async for item in operation():
-                yielded = True
-                yield item
+            async with aclosing(operation()) as stream:
+                async for item in stream:
+                    yielded = True
+                    yield item
+        except asyncio.CancelledError:
+            raise
         except Exception as error:
             if (
                 yielded

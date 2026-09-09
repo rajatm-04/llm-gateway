@@ -7,8 +7,10 @@ from fastapi.testclient import TestClient
 from gateway.api.v1.chat import stream_and_cache
 from gateway.cache.scope import build_cache_key
 from gateway.main import create_app
+from gateway.providers.base import StreamChunk
 from gateway.providers.registry import ProviderRegistry
 from gateway.router.model_router import ModelRouter
+from gateway.streaming.sse_handler import format_done, format_error, format_sse
 
 
 @pytest.fixture
@@ -75,6 +77,7 @@ def test_failed_or_incomplete_stream_not_cached(resources, flag):
     setattr(providers.local, flag, True)
     response = client.post("/v1/chat/completions", json=request_for(stream=True).model_dump())
     assert "upstream_stream_error" in response.text
+    assert response.text.endswith(format_error() + format_done())
     assert not cache.writes
 
 
@@ -89,6 +92,49 @@ async def test_cancelled_stream_not_cached(config):
                                         key=build_cache_key(request, decision, config), decision=decision):
             pass
     assert not cache.writes
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stream_propagates_and_closes_provider(config):
+    class CancelledProvider:
+        closed = False
+
+        async def generate_stream(self, **kwargs):
+            try:
+                yield StreamChunk(content="partial")
+                raise asyncio.CancelledError()
+            finally:
+                self.closed = True
+
+    cache = FakeCache()
+    provider = CancelledProvider()
+    request = request_for(stream=True)
+    decision = ModelRouter(config).select(request)
+    events = []
+
+    with pytest.raises(asyncio.CancelledError):
+        async for event in stream_and_cache(
+            request=request,
+            provider=provider,
+            cache=cache,
+            key=build_cache_key(request, decision, config),
+            decision=decision,
+        ):
+            events.append(event)
+
+    assert events == [format_sse(content="partial")]
+    assert provider.closed
+    assert not cache.writes
+
+
+def test_successful_stream_ends_with_terminal_and_done_events(resources):
+    client, _, _ = resources
+    response = client.post(
+        "/v1/chat/completions",
+        json=request_for(stream=True).model_dump(),
+    )
+
+    assert response.text.endswith(format_sse(finish_reason="length") + format_done())
 
 
 def test_cache_failure_does_not_discard_answer(resources):

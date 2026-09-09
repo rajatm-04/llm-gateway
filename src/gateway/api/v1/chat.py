@@ -1,5 +1,6 @@
 """Resolve routing once, enforce cache scope, then generate or stream."""
 
+import asyncio
 import json
 import logging
 import time
@@ -27,7 +28,7 @@ from gateway.resilience.circuit_breaker import (
 )
 from gateway.resilience.retry import RetryConfig, retry_async, retry_stream
 from gateway.router.model_router import RoutingDecision, RoutingError
-from gateway.streaming.sse_handler import format_done, format_sse
+from gateway.streaming.sse_handler import format_done, format_error, format_sse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1", tags=["chat"])
@@ -137,9 +138,10 @@ async def stream_and_cache(
         temperature=request.temperature,
         max_tokens=request.max_tokens,
     )
-    stream = operation()
     if retry is not None:
         stream = retry_stream(operation, retry)
+    else:
+        stream = operation()
     if breaker is not None:
         guarded_stream = stream
         stream = breaker.execute_stream(lambda: guarded_stream)
@@ -155,9 +157,12 @@ async def stream_and_cache(
                     terminal = chunk
             if terminal is None:
                 raise RuntimeError("Missing terminal stream event")
+    except asyncio.CancelledError:
+        logger.info("provider_stream_cancelled")
+        raise
     except Exception:  # noqa: BLE001 -- sanitize failures after SSE headers are sent.
         logger.warning("provider_stream_failed")
-        yield 'data: {"error": {"code": "upstream_stream_error", "message": "Provider stream failed"}}\n\n'
+        yield format_error()
         yield format_done()
         return
 
