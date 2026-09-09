@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from openai import APIError
 
 from gateway.cache.scope import CacheKey, build_cache_key
-from gateway.config import settings
 from gateway.models.schemas import (
     ChatCompletionChoice,
     ChatCompletionRequest,
@@ -21,8 +20,6 @@ from gateway.models.schemas import (
     UsageInfo,
 )
 from gateway.providers.base import LLMResponse, Provider, StreamChunk
-from gateway.providers.ollama_provider import OllamaProvider
-from gateway.providers.openai_provider import OpenAIProvider
 from gateway.resilience.circuit_breaker import (
     CircuitBreaker,
     CircuitOpenError,
@@ -35,47 +32,12 @@ from gateway.streaming.sse_handler import format_done, format_sse
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1", tags=["chat"])
 
-# These objects retain the small, injectable API used by the resilience tests and
-# by callers that use this module without the application factory.
-ollama_provider = OllamaProvider()
-ollama_breaker = CircuitBreaker(
-    failure_threshold=settings.circuit_failure_threshold,
-    recovery_timeout=settings.circuit_recovery_timeout,
-    half_open_max_calls=settings.circuit_half_open_max_calls,
-)
-openai_breaker = CircuitBreaker(
-    failure_threshold=settings.circuit_failure_threshold,
-    recovery_timeout=settings.circuit_recovery_timeout,
-    half_open_max_calls=settings.circuit_half_open_max_calls,
-)
-retry_config = RetryConfig(
-    max_attempts=settings.retry_max_attempts,
-    base_delay=settings.retry_base_delay,
-    max_delay=settings.retry_max_delay,
-    jitter=settings.retry_jitter,
-)
-
-
-def get_provider(model: str | None) -> tuple[Provider, CircuitBreaker]:
-    """Select a provider for the legacy module-level API."""
-    if model and model.lower().startswith("gpt-"):
-        if not settings.openai_api_key:
-            raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured")
-        return OpenAIProvider(), openai_breaker
-    return ollama_provider, ollama_breaker
-
-
-def is_premium_model(model: str | None) -> bool:
-    """Return whether a legacy model name denotes the premium provider."""
-    return bool(model and model.lower().startswith("gpt-"))
-
-
 def fallback_allowed(request: Request) -> bool:
     """Read explicit client consent for premium-to-local fallback."""
     return request.headers.get("x-allow-fallback", "").lower() == "true"
 
 
-def fallback_unavailable_response(config=settings) -> JSONResponse:
+def fallback_unavailable_response(config) -> JSONResponse:
     """Tell the client that local fallback requires explicit confirmation."""
     return JSONResponse(
         status_code=503,
@@ -89,17 +51,6 @@ def fallback_unavailable_response(config=settings) -> JSONResponse:
             }
         },
         headers={"Retry-After": str(int(config.circuit_recovery_timeout))},
-    )
-
-
-def build_cache_query(request: ChatCompletionRequest) -> str:
-    """Create a cache query for the legacy module-level API."""
-    messages = "\n".join(f"{message.role}: {message.content}" for message in request.messages)
-    return (
-        f"model={request.model or settings.ollama_model}\n"
-        f"temperature={request.temperature}\n"
-        f"max_tokens={request.max_tokens}\n"
-        f"{messages}"
     )
 
 
@@ -254,125 +205,6 @@ def _breaker(state, tier: str, config) -> CircuitBreaker:
     return breakers[tier]
 
 
-async def _legacy_stream(
-    request: ChatCompletionRequest,
-    provider: Provider,
-    breaker: CircuitBreaker,
-    config,
-) -> AsyncIterator[str]:
-    """Streaming adapter for the pre-registry module-level API."""
-    operation = lambda: provider.generate_stream(
-        messages=request.messages,
-        model=request.model,
-        temperature=request.temperature,
-        max_tokens=request.max_tokens,
-    )
-    try:
-        async for chunk in breaker.execute_stream(lambda: retry_stream(operation, _retry_config(config))):
-            yield format_sse(content=_chunk_content(chunk))
-        yield format_sse(finish_reason="stop")
-    finally:
-        yield format_done()
-
-
-async def _legacy_chat_completions(request: ChatCompletionRequest, http_request: Request):
-    """Keep the resilience API usable for direct calls outside create_app."""
-    cache = http_request.app.state.cache
-    query = build_cache_query(request)
-    payload = await cache.lookup(query)
-    if payload is not None:
-        if request.stream:
-            return StreamingResponse(stream_cached(payload), media_type="text/event-stream")
-        return JSONResponse(
-            create_response(
-                content=payload["response"],
-                model=payload["model"],
-                created=payload.get("created"),
-                finish_reason=payload.get("finish_reason", "stop"),
-            ).model_dump(mode="json")
-        )
-
-    allow_fallback = fallback_allowed(http_request)
-    premium_request = is_premium_model(request.model)
-    fallback = False
-    try:
-        provider, breaker = get_provider(request.model)
-    except HTTPException:
-        if not (premium_request and allow_fallback):
-            if premium_request:
-                return fallback_unavailable_response()
-            raise
-        provider, breaker = ollama_provider, ollama_breaker
-        request = request.model_copy(update={"model": settings.ollama_model})
-        fallback = True
-
-    if request.stream:
-        return StreamingResponse(
-            _legacy_stream(request, provider, breaker, settings),
-            media_type="text/event-stream",
-        )
-
-    try:
-        result: LLMResponse = await breaker.execute(
-            lambda: retry_async(
-                lambda: provider.generate(
-                    messages=request.messages,
-                    model=request.model,
-                    temperature=request.temperature,
-                    max_tokens=request.max_tokens,
-                ),
-                retry_config,
-            )
-        )
-    except CircuitOpenError as exc:
-        if premium_request and allow_fallback:
-            result = await ollama_breaker.execute(
-                lambda: retry_async(
-                    lambda: ollama_provider.generate(
-                        messages=request.messages,
-                        model=settings.ollama_model,
-                        temperature=request.temperature,
-                        max_tokens=request.max_tokens,
-                    ),
-                    retry_config,
-                )
-            )
-            fallback = True
-        elif premium_request:
-            return fallback_unavailable_response()
-        else:
-            raise HTTPException(
-                503,
-                "LLM provider circuit is open",
-                headers={"Retry-After": str(int(settings.circuit_recovery_timeout))},
-            ) from exc
-
-    response = create_response(
-        content=result.content,
-        model=result.model,
-        prompt_tokens=result.prompt_tokens,
-        completion_tokens=result.completion_tokens,
-        finish_reason=result.finish_reason,
-    )
-    headers = {"X-Model-Used": result.model}
-    if fallback:
-        headers["X-Fallback"] = "true"
-    if not fallback:
-        await cache.store(
-            query=query,
-            response=result.content,
-            metadata={
-                "model": response.model,
-                "created": response.created,
-                "prompt_tokens": result.prompt_tokens,
-                "completion_tokens": result.completion_tokens,
-                "total_tokens": result.total_tokens,
-                "finish_reason": result.finish_reason,
-            },
-        )
-    return JSONResponse(response.model_dump(mode="json"), headers=headers)
-
-
 @router.post("/chat/completions", response_model=None)
 async def chat_completions(
     request: ChatCompletionRequest,
@@ -380,9 +212,6 @@ async def chat_completions(
     x_model_tier: str | None = Header(default=None),
 ):
     state = http_request.app.state
-    if not hasattr(state, "model_router"):
-        return await _legacy_chat_completions(request, http_request)
-
     config = state.config
     try:
         decision = state.model_router.select(request, x_model_tier)
