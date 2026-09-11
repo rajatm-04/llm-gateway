@@ -1,4 +1,4 @@
-# LLM Gateway
+# Prism - Intelligent LLM gateway
 
 FastAPI gateway for one local Ollama model and one premium
 OpenAI-compatible provider. It combines deterministic profile-based task
