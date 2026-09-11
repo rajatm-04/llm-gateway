@@ -2,6 +2,7 @@
 
 from gateway.config import Settings
 from gateway.providers.base import Provider
+from gateway.providers.gemini_provider import GeminiProvider
 from gateway.providers.ollama_provider import OllamaProvider
 from gateway.providers.openai_provider import OpenAIProvider
 from gateway.router.model_router import RoutingError
@@ -13,25 +14,28 @@ class ProviderRegistry:
         self.local = OllamaProvider(
             host=config.ollama_host, default_model=config.ollama_model, timeout=config.ollama_timeout,
         )
-        self.premium: OpenAIProvider | None = None
+        self.openai = OpenAIProvider(
+            api_key=config.openai_api_key,
+            default_model=config.openai_model,
+            base_url=config.openai_base_url,
+            timeout=config.openai_timeout,
+        ) if config.openai_api_key else None
+        self.gemini = GeminiProvider(
+            api_key=config.gemini_api_key,
+            default_model=config.openai_model,
+        ) if config.gemini_api_key else None
+        self.premium = self.openai
 
     def get(self, tier: str) -> Provider:
         if tier == "local":
             return self.local
         if tier != "premium":
             raise RoutingError("Unsupported provider tier")
-        if not self.config.openai_api_key:
-            raise RoutingError("OPENAI_API_KEY is not configured", 503)
         if self.premium is None:
-            self.premium = OpenAIProvider(
-                api_key=self.config.openai_api_key,
-                default_model=self.config.openai_model,
-                base_url=self.config.openai_base_url,
-                timeout=self.config.openai_timeout,
-                max_retries=0,
-            )
+            raise RoutingError("Premium provider API key is not configured", 503)
         return self.premium
 
     async def close(self) -> None:
-        if self.premium is not None:
-            await self.premium.close()
+        for provider in (self.openai, self.gemini):
+            if provider is not None:
+                await provider.close()

@@ -18,7 +18,6 @@ class OpenAIProvider:
         default_model: str | None = None,
         base_url: str | None = None,
         timeout: float | None = None,
-        max_retries: int = 0,
     ) -> None:
         key = api_key or settings.openai_api_key
         if not key:
@@ -28,7 +27,6 @@ class OpenAIProvider:
             api_key=key,
             base_url=base_url or settings.openai_base_url,
             timeout=timeout or settings.openai_timeout,
-            max_retries=max_retries,
         )
         self.default_model = default_model or settings.openai_model
 

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from gateway.providers.gemini_provider import GeminiProvider
 from gateway.providers.ollama_provider import OllamaProvider
 from gateway.providers.openai_provider import OpenAIProvider
 
@@ -83,6 +84,51 @@ async def test_openai_stream_closes_on_failure_or_cancellation(failure):
         _ = [chunk async for chunk in provider.generate_stream([], model="selected")]
 
     assert stream.closed
+
+
+@pytest.mark.asyncio
+async def test_gemini_provider_maps_response_and_stream():
+    class FakeStream:
+        def __aiter__(self):
+            async def events():
+                yield SimpleNamespace(text="Hi")
+                yield SimpleNamespace(text="")
+
+            return events()
+
+    generate = AsyncMock(
+        return_value=SimpleNamespace(
+            text="Hello",
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=3,
+                candidates_token_count=2,
+            ),
+        )
+    )
+    generate_stream = AsyncMock(return_value=FakeStream())
+    client = SimpleNamespace(
+        aio=SimpleNamespace(
+            models=SimpleNamespace(
+                generate_content=generate,
+                generate_content_stream=generate_stream,
+            ),
+            aclose=AsyncMock(),
+        )
+    )
+    provider = GeminiProvider.__new__(GeminiProvider)
+    provider.client = client
+    provider.default_model = "gemini-test"
+
+    response = await provider.generate([], model="selected", max_tokens=32)
+    chunks = [chunk async for chunk in provider.generate_stream([], model="selected")]
+
+    assert response.content == "Hello"
+    assert response.prompt_tokens == 3
+    assert response.completion_tokens == 2
+    assert chunks[0].content == "Hi"
+    assert chunks[-1].finish_reason == "stop"
+    assert generate.call_args.kwargs["model"] == "selected"
+    assert generate_stream.call_args.kwargs["model"] == "selected"
 
 
 @pytest.mark.asyncio
