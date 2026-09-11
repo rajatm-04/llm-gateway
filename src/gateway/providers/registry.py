@@ -22,7 +22,8 @@ class ProviderRegistry:
         ) if config.openai_api_key else None
         self.gemini = GeminiProvider(
             api_key=config.gemini_api_key,
-            default_model=config.openai_model,
+            default_model=config.gemini_model,
+            timeout=config.gemini_timeout,
         ) if config.gemini_api_key else None
         self.premium = self.openai
 

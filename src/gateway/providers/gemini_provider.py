@@ -12,10 +12,18 @@ from gateway.providers.base import LLMResponse, StreamChunk
 class GeminiProvider:
     """Adapt Gemini's native API to Prism's provider interface."""
 
-    def __init__(self, api_key: str, default_model: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        default_model: str,
+        timeout: float = 120.0,
+    ) -> None:
         if not api_key:
             raise ValueError("GEMINI_API_KEY is not configured")
-        self.client = genai.Client(api_key=api_key)
+        self.client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=int(timeout * 1000)),
+        )
         self.default_model = default_model
 
     @staticmethod

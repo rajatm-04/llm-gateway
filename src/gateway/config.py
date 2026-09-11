@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.experientiallabs.ai/v1"
     openai_model: str = "gpt-5.6-sol"
     gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.8-flash"
+    gemini_timeout: float = Field(default=120.0, gt=0)
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "phi4-mini"
     ollama_timeout: float = Field(default=120.0, gt=0)
