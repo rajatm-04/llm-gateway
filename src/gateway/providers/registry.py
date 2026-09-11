@@ -25,7 +25,7 @@ class ProviderRegistry:
             default_model=config.gemini_model,
             timeout=config.gemini_timeout,
         ) if config.gemini_api_key else None
-        self.premium = self.openai
+        self.premium = self.gemini
 
     def get(self, tier: str) -> Provider:
         if tier == "local":
