@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_dataset_splits_and_schema():
     from gateway.models.schemas import ChatCompletionRequest
-    rows = [json.loads(line) for line in (ROOT / "evaluation/requests.jsonl").read_text().splitlines()]
+    rows = [json.loads(line) for line in (ROOT / "experiments/evaluation/requests.jsonl").read_text().splitlines()]
     assert len(rows) == 30
     assert len({row["id"] for row in rows}) == len(rows)
     assert {row["split"] for row in rows} == {"dev", "test"}
@@ -24,7 +24,7 @@ def test_dataset_splits_and_schema():
 
 @pytest.mark.asyncio
 async def test_evaluation_dry_run_no_results_or_providers(config, tmp_path, capsys):
-    script = runpy.run_path(str(ROOT / "scripts/evaluate_routing.py"))
+    script = runpy.run_path(str(ROOT / "experiments/evaluate_routing.py"))
     run = script["run"]
     run.__globals__["settings"] = config
 
@@ -34,7 +34,7 @@ async def test_evaluation_dry_run_no_results_or_providers(config, tmp_path, caps
     run.__globals__["ProviderRegistry"] = forbidden
     output = tmp_path / "not-created"
     await run(argparse.Namespace(
-        dataset=ROOT / "evaluation/requests.jsonl", split="dev", limit=2,
+        dataset=ROOT / "experiments/evaluation/requests.jsonl", split="dev", limit=2,
         max_output_tokens=32, allow_paid_calls=False, max_premium_calls=2,
         output_dir=output, deployment_notes="test",
     ))
@@ -45,13 +45,13 @@ async def test_evaluation_dry_run_no_results_or_providers(config, tmp_path, caps
 def test_rewrite_development_dataset():
     from gateway.models.schemas import ChatCompletionRequest
 
-    script = runpy.run_path(str(ROOT / "scripts/evaluate_routing.py"))
-    path = ROOT / "evaluation/rewrite_dev.jsonl"
+    script = runpy.run_path(str(ROOT / "experiments/evaluate_routing.py"))
+    path = ROOT / "experiments/evaluation/rewrite_dev.jsonl"
     rows = script["load_cases"](path, "dev")
     assert len(rows) == 10
     assert len({row["id"] for row in rows}) == 10
     assert not script["load_cases"](path, "test")
-    original = script["load_cases"](ROOT / "evaluation/requests.jsonl", "all")
+    original = script["load_cases"](ROOT / "experiments/evaluation/requests.jsonl", "all")
     assert not {row["id"] for row in rows} & {row["id"] for row in original}
     for row in rows:
         ChatCompletionRequest(messages=[{"role": "user", "content": row["prompt"]}])
@@ -59,9 +59,9 @@ def test_rewrite_development_dataset():
 
 
 def test_targeted_case_selection():
-    script = runpy.run_path(str(ROOT / "scripts/evaluate_routing.py"))
+    script = runpy.run_path(str(ROOT / "experiments/evaluate_routing.py"))
     select = script["select_cases"]
-    dataset = ROOT / "evaluation/requests.jsonl"
+    dataset = ROOT / "experiments/evaluation/requests.jsonl"
     cases = select(dataset, "dev", 2, ["d14", "d13"])
     assert [case["id"] for case in cases] == ["d13", "d14"]
     assert [case["id"] for case in select(dataset, "dev", 1)] == ["d01"]
@@ -74,9 +74,9 @@ def test_targeted_case_selection():
     (["d13", "d14"], 1),
 ])
 def test_invalid_case_selection(ids, limit):
-    script = runpy.run_path(str(ROOT / "scripts/evaluate_routing.py"))
+    script = runpy.run_path(str(ROOT / "experiments/evaluate_routing.py"))
     with pytest.raises(ValueError):
-        script["select_cases"](ROOT / "evaluation/requests.jsonl", "dev", limit, ids)
+        script["select_cases"](ROOT / "experiments/evaluation/requests.jsonl", "dev", limit, ids)
 
 
 def test_report_does_not_count_ungraded_as_pass(tmp_path, capsys):
@@ -86,7 +86,7 @@ def test_report_does_not_count_ungraded_as_pass(tmp_path, capsys):
     }}
     (tmp_path / "results.jsonl").write_text(json.dumps(row) + "\n")
     (tmp_path / "grades.csv").write_text("id,local_acceptable,premium_acceptable,notes\none,,,\n")
-    script = runpy.run_path(str(ROOT / "scripts/report_evaluation.py"))
+    script = runpy.run_path(str(ROOT / "experiments/report_evaluation.py"))
     script["report"](tmp_path)
     text = capsys.readouterr().out
     assert "Fully graded successful pairs: 0" in text
@@ -111,7 +111,7 @@ def test_report_review_and_benchmark_counts(tmp_path, capsys):
         writer.writerow(["id", "local_acceptable", "premium_acceptable", "notes"])
         for name, local, premium in labels:
             writer.writerow([name, local, premium, ""])
-    report = runpy.run_path(str(ROOT / "scripts/report_evaluation.py"))["report"]
+    report = runpy.run_path(str(ROOT / "experiments/report_evaluation.py"))["report"]
     report(tmp_path)
     text = capsys.readouterr().out
     assert "Fully graded successful pairs: 4" in text
@@ -123,6 +123,6 @@ def test_report_review_and_benchmark_counts(tmp_path, capsys):
 def test_report_rejects_invalid_grade(tmp_path):
     (tmp_path / "results.jsonl").write_text("")
     (tmp_path / "grades.csv").write_text("id,local_acceptable,premium_acceptable,notes\none,maybe,yes,\n")
-    report = runpy.run_path(str(ROOT / "scripts/report_evaluation.py"))["report"]
+    report = runpy.run_path(str(ROOT / "experiments/report_evaluation.py"))["report"]
     with pytest.raises(ValueError, match="Invalid local grade"):
         report(tmp_path)

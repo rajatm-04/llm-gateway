@@ -1,4 +1,4 @@
-"""Load a small, model-specific suitability profile; never infer validation."""
+"""Load a small, model-specific suitability profile."""
 
 from pathlib import Path
 from typing import Literal
@@ -16,7 +16,6 @@ class ModelProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     model: str = Field(min_length=1)
     version: str = Field(min_length=1)
-    validated: bool = False
     notes: str = ""
     tasks: dict[Literal["rewrite", "summary", "extraction"], TaskPolicy]
 

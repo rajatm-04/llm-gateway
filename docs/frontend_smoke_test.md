@@ -11,7 +11,7 @@ Keep Ollama and Qdrant running. From PowerShell in the project root:
 
 ```powershell
 uv run pytest tests/ -q
-uv run ruff check src/gateway tests scripts
+uv run ruff check src/gateway tests experiments
 uv run uvicorn gateway.main:app --reload
 ```
 
@@ -20,8 +20,8 @@ dependency is required. If a previous page/script is cached, use Ctrl+F5.
 The root URL now serves HTML instead of the former welcome JSON; /health and
 /v1/chat/completions are unchanged. /docs remains the API reference.
 
-Loading the page fetches only assets and /ui/config, an allowlist of model names,
-routing mode, and output limits. It does not check provider health or generate.
+Loading the page fetches only assets and /ui/config, an allowlist of model names
+and output limits. It does not check provider health or generate.
 Qdrant is still required during application startup. First semantic use can
 load/download the embedding model.
 
@@ -103,7 +103,7 @@ specific test above says otherwise.
 - Check with a screen reader that status changes are announced without reading
   every streamed token. Check text contrast and keyboard focus in the browser.
 
-Malformed/split SSE, UTF-8 boundary handling, rendering safety and cancellation
+Malformed/split SSE, UTF-8 boundary handling, rendering safety and abort handling
 are implemented in JavaScript but have not been browser-automated here. Python
 route tests cover delivery/config isolation, not these client behaviors. Existing
-provider/stream tests cover server-side incomplete/error/cancellation paths.
+provider/stream tests cover server-side incomplete and error paths.

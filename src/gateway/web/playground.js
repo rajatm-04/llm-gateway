@@ -4,7 +4,7 @@ const $ = (id) => document.getElementById(id);
 let config = null;
 let activeController = null;
 const setText = (id, value) => { $(id).textContent = value; };
-const resultIds = ["tier", "cache", "http", "elapsed", "model", "source", "reason", "cache-time", "finish", "usage", "profile", "policy"];
+const resultIds = ["tier", "cache", "http", "elapsed", "model", "source", "reason", "cache-time", "finish", "usage", "policy"];
 
 function couldUsePremium() {
   // Conservative UI acknowledgement, not a duplicate of backend routing logic.
@@ -41,7 +41,7 @@ function displayHeaders(response) {
   setText("result-http", String(response.status));
   for (const [id, name] of Object.entries({
     tier: "X-Model-Tier", cache: "X-Cache", model: "X-Model-Used",
-    reason: "X-Routing-Reason", profile: "X-Routing-Profile", policy: "X-Routing-Policy"
+    reason: "X-Routing-Reason", policy: "X-Routing-Policy"
   })) {
     setText(`result-${id}`, header(name));
   }
@@ -265,7 +265,7 @@ async function initialize() {
       $("model").add(new Option(`${label} — ${name}`, name));
     }
     $("max-tokens").value = String(Math.min(128, config.local_max_output_tokens, config.premium_max_output_tokens));
-    setText("connection", `Gateway settings loaded · Routing mode: ${config.routing_mode}. Provider availability is checked only when you send.`);
+    setText("connection", "Gateway settings loaded. Provider availability is checked only when you send.");
     setText("limits", `Configured output limits: local ${config.local_max_output_tokens}, premium ${config.premium_max_output_tokens} tokens. The server validates the selected route; these are not native context-window sizes.`);
     updateControls();
     $("request-controls").disabled = false;

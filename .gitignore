@@ -15,4 +15,4 @@ wheels/
 .ruff_cache/
 .coverage
 htmlcov/
-evaluation/results/
+experiments/evaluation/results/

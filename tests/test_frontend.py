@@ -45,7 +45,6 @@ def test_ui_config_is_an_explicit_public_allowlist(frontend, config):
     assert response.json() == {
         "local_model": config.ollama_model,
         "premium_model": config.openai_model,
-        "routing_mode": config.routing_mode,
         "local_max_output_tokens": config.local_max_output_tokens,
         "premium_max_output_tokens": config.premium_max_output_tokens,
     }

@@ -1,7 +1,6 @@
 """Application configuration loaded from environment variables."""
 
 from pathlib import Path
-from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,8 +39,7 @@ class Settings(BaseSettings):
     # Cache Settings
     cache_similarity_threshold: float = Field(default=0.95, ge=0, le=1)
 
-    # Routing: profile ranges are experimental, not measured capability claims.
-    routing_mode: Literal["experimental", "strict"] = "experimental"
+    # Routing profiles describe the current local-model policy.
     routing_profile_path: Path = Path(__file__).parent / "router" / "profiles" / "phi4-mini.json"
     # Conservative deployment admission guards, NOT exact context-token limits.
     local_max_input_bytes: int = Field(default=12000, gt=0)
@@ -55,9 +53,6 @@ class Settings(BaseSettings):
     def resolve_profile_path(cls, value: Path) -> Path:
         value = value.expanduser()
         return value if value.is_absolute() else ENV_FILE.parent / value
-
-    # Rate Limiting (not enforced until the resilience phase)
-    rate_limit_rpm: int = 60
 
     # Circuit Breaker
     circuit_failure_threshold: int = 5

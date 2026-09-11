@@ -3,38 +3,15 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from gateway.api.v1.chat import router as chat_router
 from gateway.config import Settings, settings
 from gateway.providers.registry import ProviderRegistry
-from gateway.request_logging import RequestLoggingMiddleware
 from gateway.resilience.circuit_breaker import CircuitBreaker
-from gateway.resilience.rate_limiter import (
-    RateLimiter,
-    rate_limit_identity,
-    rate_limit_response,
-)
 from gateway.router.model_router import ModelRouter
-
-rate_limiter = RateLimiter(settings.rate_limit_rpm)
-
-
-class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Reject requests that exceed the configured per-client request rate."""
-
-    def __init__(self, app, limiter: RateLimiter | None = None):
-        super().__init__(app)
-        self.limiter = limiter if limiter is not None else rate_limiter
-
-    async def dispatch(self, request: Request, call_next):
-        allowed, retry_after = self.limiter.allow(rate_limit_identity(request))
-        if not allowed:
-            return rate_limit_response(retry_after)
-        return await call_next(request)
 
 
 def create_app(
@@ -82,11 +59,9 @@ def create_app(
     app = FastAPI(
         title="LLM Gateway",
         version="1.0.0",
-        description="Experimental task-aware routing and scoped semantic caching",
+        description="Task-aware routing and scoped semantic caching",
         lifespan=lifespan,
     )
-    app.add_middleware(RateLimitMiddleware, limiter=RateLimiter(config.rate_limit_rpm))
-    app.add_middleware(RequestLoggingMiddleware)
     app.include_router(chat_router)
 
     web_directory = Path(__file__).resolve().parent / "web"
@@ -115,7 +90,6 @@ def create_app(
             {
                 "local_model": config.ollama_model,
                 "premium_model": config.openai_model,
-                "routing_mode": config.routing_mode,
                 "local_max_output_tokens": config.local_max_output_tokens,
                 "premium_max_output_tokens": config.premium_max_output_tokens,
             },

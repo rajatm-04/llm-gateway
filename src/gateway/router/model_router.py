@@ -22,7 +22,6 @@ class RoutingDecision:
     provider: str
     reason: str
     policy_version: str
-    profile_status: str
     features: TaskFeatures
 
 
@@ -33,7 +32,7 @@ class ModelRouter:
         if config.ollama_model == config.openai_model:
             raise ValueError("Local and premium model names must be different")
         fingerprint = hashlib.sha256(self.profile.model_dump_json().encode()).hexdigest()[:12]
-        self.policy_version = f"{CLASSIFIER_VERSION}:{config.routing_mode}:{fingerprint}"
+        self.policy_version = f"{CLASSIFIER_VERSION}:{fingerprint}"
 
     def select(self, request: ChatCompletionRequest, tier_override: str | None = None) -> RoutingDecision:
         features = classify(request)
@@ -73,24 +72,18 @@ class ModelRouter:
         if request.max_tokens is not None and request.max_tokens > output_limit:
             raise RoutingError("max_tokens exceeds selected model's configured output limit")
 
-        matched = self.profile.model == self.config.ollama_model
-        status = ("unmatched" if not matched else
-                  "validated" if self.profile.validated else "experimental")
         return RoutingDecision(
             tier=tier,
             model=self.config.ollama_model if tier == "local" else self.config.openai_model,
             provider="ollama" if tier == "local" else "openai-compatible",
             reason=reason,
             policy_version=self.policy_version,
-            profile_status=status,
             features=features,
         )
 
     def _automatic(self, features: TaskFeatures) -> tuple[str, str]:
         if self.profile.model != self.config.ollama_model:
             return "premium", "local_profile_model_mismatch"
-        if self.config.routing_mode == "strict" and not self.profile.validated:
-            return "premium", "local_profile_not_validated"
         policy = self.profile.tasks.get(features.task_type)
         if policy is None or not policy.enabled:
             return "premium", features.reason if policy is None else "local_task_disabled"

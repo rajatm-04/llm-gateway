@@ -84,7 +84,7 @@ async def run(args):
     if not settings.openai_api_key:
         raise ValueError("Premium API key is not configured")
 
-    output = args.output_dir or ROOT / "evaluation" / "results" / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    output = args.output_dir or ROOT / "experiments" / "evaluation" / "results" / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     output.mkdir(parents=True, exist_ok=False)  # Never overwrite an existing run.
     manifest = {
         "started_at": datetime.now(UTC).isoformat(),
@@ -138,12 +138,12 @@ async def run(args):
     finally:
         await registry.close()
     print(f"Results: {output}")
-    print("Review using evaluation/grading_policy.md and case rubrics; fill grades.csv with yes/no/review. Blanks are ungraded.")
+    print("Review using experiments/evaluation/grading_policy.md and case rubrics; fill grades.csv with yes/no/review. Blanks are ungraded.")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", type=Path, default=ROOT / "evaluation" / "requests.jsonl")
+    parser.add_argument("--dataset", type=Path, default=ROOT / "experiments" / "evaluation" / "requests.jsonl")
     parser.add_argument("--split", choices=["dev", "test", "all"], default="dev")
     parser.add_argument("--limit", type=positive_int, default=10)
     parser.add_argument("--case-ids", nargs="+", help="Run only these IDs within the selected split, e.g. d13 d14")

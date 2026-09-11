@@ -1,15 +1,9 @@
-import asyncio
-
 import pytest
 from conftest import FakeCache, FakeRegistry, request_for
 from fastapi.testclient import TestClient
 
-from gateway.api.v1.chat import stream_and_cache
-from gateway.cache.scope import build_cache_key
 from gateway.main import create_app
-from gateway.providers.base import StreamChunk
 from gateway.providers.registry import ProviderRegistry
-from gateway.router.model_router import ModelRouter
 from gateway.streaming.sse_handler import format_done, format_error, format_sse
 
 
@@ -27,7 +21,6 @@ def test_local_miss_hit_and_headers(resources):
     first = client.post("/v1/chat/completions", json=body)
     assert first.status_code == 200
     assert first.headers["x-model-tier"] == "local"
-    assert first.headers["x-routing-profile"] == "experimental"
     assert first.headers["x-cache"] == "MISS"
     assert providers.local.calls[0]["model"] == "phi4-mini"
     second = client.post("/v1/chat/completions", json=body)
@@ -78,52 +71,6 @@ def test_failed_or_incomplete_stream_not_cached(resources, flag):
     response = client.post("/v1/chat/completions", json=request_for(stream=True).model_dump())
     assert "upstream_stream_error" in response.text
     assert response.text.endswith(format_error() + format_done())
-    assert not cache.writes
-
-
-@pytest.mark.asyncio
-async def test_cancelled_stream_not_cached(config):
-    cache, providers = FakeCache(), FakeRegistry()
-    providers.local.cancel_stream = True
-    request = request_for(stream=True)
-    decision = ModelRouter(config).select(request)
-    with pytest.raises(asyncio.CancelledError):
-        async for _ in stream_and_cache(request=request, provider=providers.local, cache=cache,
-                                        key=build_cache_key(request, decision, config), decision=decision):
-            pass
-    assert not cache.writes
-
-
-@pytest.mark.asyncio
-async def test_cancelled_stream_propagates_and_closes_provider(config):
-    class CancelledProvider:
-        closed = False
-
-        async def generate_stream(self, **kwargs):
-            try:
-                yield StreamChunk(content="partial")
-                raise asyncio.CancelledError()
-            finally:
-                self.closed = True
-
-    cache = FakeCache()
-    provider = CancelledProvider()
-    request = request_for(stream=True)
-    decision = ModelRouter(config).select(request)
-    events = []
-
-    with pytest.raises(asyncio.CancelledError):
-        async for event in stream_and_cache(
-            request=request,
-            provider=provider,
-            cache=cache,
-            key=build_cache_key(request, decision, config),
-            decision=decision,
-        ):
-            events.append(event)
-
-    assert events == [format_sse(content="partial")]
-    assert provider.closed
     assert not cache.writes
 
 

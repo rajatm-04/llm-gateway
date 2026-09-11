@@ -30,11 +30,10 @@ def test_system_and_conversation_unknown():
     assert classify(request).task_type == "unknown"
 
 
-def test_experimental_default_and_unknown(config):
+def test_profile_routes_local_candidates_and_unknown_premium(config):
     router = ModelRouter(config)
     decision = router.select(request_for())
     assert decision.tier == "local"
-    assert decision.profile_status == "experimental"
     assert router.select(request_for("Prove the theorem.")).tier == "premium"
 
 
@@ -62,10 +61,8 @@ def test_unsupported_model_and_normalized_tier(config):
     assert router.select(request_for(), " PREMIUM ").tier == "premium"
 
 
-def test_strict_profile_and_model_change(config):
-    config.routing_mode = "strict"
-    assert ModelRouter(config).select(request_for()).reason == "local_profile_not_validated"
-    profile = load_profile(config.routing_profile_path).model_copy(update={"validated": True})
+def test_profile_model_change(config):
+    profile = load_profile(config.routing_profile_path)
     assert ModelRouter(config, profile).select(request_for()).tier == "local"
     config.ollama_model = "different-model"
     router = ModelRouter(config, profile)

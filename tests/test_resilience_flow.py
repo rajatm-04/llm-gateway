@@ -1,13 +1,10 @@
-import pytest
 from conftest import FakeCache, FakeRegistry
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from gateway.main import RateLimitMiddleware, create_app
+from gateway.main import create_app
 from gateway.models.schemas import ChatCompletionRequest, ChatMessage
 from gateway.providers.base import LLMResponse
 from gateway.resilience.circuit_breaker import CircuitState
-from gateway.resilience.rate_limiter import RateLimiter
 
 
 class ProviderError(Exception):
@@ -83,13 +80,13 @@ def test_exhausted_retries_open_breaker_and_return_503(config):
     app = create_app(config=config, cache=FakeCache(), providers=providers)
 
     with TestClient(app, raise_server_exceptions=True) as client:
-        with pytest.raises(ProviderError):
-            client.post(
-                "/v1/chat/completions",
-                json=chat_request().model_dump(),
-                headers={"X-Model-Tier": "local"},
-            )
+        response = client.post(
+            "/v1/chat/completions",
+            json=chat_request().model_dump(),
+            headers={"X-Model-Tier": "local"},
+        )
 
+        assert response.status_code == 502
         assert provider.calls == 2
         assert app.state.breakers["local"].state is CircuitState.OPEN
 
@@ -102,7 +99,7 @@ def test_exhausted_retries_open_breaker_and_return_503(config):
     assert response.status_code == 503
 
 
-def test_premium_circuit_requires_confirmation_then_falls_back(config):
+def test_premium_circuit_returns_503_without_switching_provider(config):
     premium = SequenceProvider([ProviderError()])
     local = SequenceProvider([LLMResponse(content="local", model="phi4-mini")])
     providers = FakeRegistry()
@@ -116,30 +113,22 @@ def test_premium_circuit_requires_confirmation_then_falls_back(config):
     app = create_app(config=config, cache=FakeCache(), providers=providers)
 
     with TestClient(app, raise_server_exceptions=True) as client:
-        with pytest.raises(ProviderError):
-            client.post(
+        first = client.post(
                 "/v1/chat/completions",
                 json=chat_request().model_dump(),
                 headers={"X-Model-Tier": "premium"},
             )
+        assert first.status_code == 503
         assert app.state.breakers["premium"].state is CircuitState.OPEN
 
-        denied = client.post(
+        response = client.post(
             "/v1/chat/completions",
             json=chat_request().model_dump(),
             headers={"X-Model-Tier": "premium"},
         )
-        allowed = client.post(
-            "/v1/chat/completions",
-            json=chat_request().model_dump(),
-            headers={"X-Model-Tier": "premium", "X-Allow-Fallback": "true"},
-        )
-
-    assert denied.status_code == 503
-    assert denied.json()["error"]["requires_confirmation"] is True
-    assert allowed.headers["X-Fallback"] == "true"
-    assert allowed.headers["X-Model-Used"] == "phi4-mini"
-    assert local.calls == 1
+    assert response.status_code == 503
+    assert "premium" not in response.text.lower()
+    assert local.calls == 0
 
 
 def test_cache_hit_bypasses_provider_and_does_not_store(config):
@@ -166,23 +155,3 @@ def test_cache_hit_bypasses_provider_and_does_not_store(config):
     assert provider.calls == 1
     assert len(cache.lookups) == 2
     assert len(cache.writes) == 1
-
-
-def test_rate_limit_middleware_returns_429_after_exhaustion(monkeypatch):
-    from gateway import main
-
-    monkeypatch.setattr(main, "rate_limiter", RateLimiter(2))
-    app = FastAPI()
-    app.add_middleware(RateLimitMiddleware)
-
-    @app.get("/test")
-    async def test_route():
-        return {"ok": True}
-
-    with TestClient(app) as client:
-        assert client.get("/test").status_code == 200
-        assert client.get("/test").status_code == 200
-        limited = client.get("/test")
-
-    assert limited.status_code == 429
-    assert int(limited.headers["retry-after"]) >= 1
